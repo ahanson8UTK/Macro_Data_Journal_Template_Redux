@@ -1,0 +1,183 @@
+# Macro Data Journal — ECON 413 (Student Guide)
+
+Welcome! This is your **weekly macro data journal**. Each week you’ll:
+- Look at a couple of macro series,
+- Run a few simple transforms,
+- Save plots and a CSV,
+- Write a **2‑sentence reflection** as comments,
+- Commit to GitHub Classroom.
+
+You’ll keep **one R script** the whole semester. Each new week, you **add a small block** to the end of that file. Earlier weeks are never lost.
+
+---
+
+## What you turn in each week (10–20 minutes)
+
+1. A new **Weekly Block** added to your R script (copy/paste + edit a few lines).
+2. A few saved plots in `/plots` and one CSV in `/data/weekly`.
+3. A **two‑sentence reflection** (as `#` comments right under your block).
+4. A commit to GitHub Classroom (example message: `journal: W05 spark/build/atelier/capture`).
+
+---
+
+## One‑time setup (5 minutes)
+
+1. Open RStudio (Cloud or Desktop).
+2. Create a new R Project (or open the class project).
+3. Install packages (run this once in the Console):
+
+   ```r
+   install.packages(c("tidyverse","quantmod","lubridate","scales"))
+   # Optional, for advanced atelier:
+   install.packages(c("mFilter","vars"))
+   ```
+
+4. Create or open the script `macro_journal.R`. Paste the **class template** your instructor posted in Canvas.
+
+The script will auto‑create folders:
+```
+data/
+  raw/            # raw pulls cached by date
+  weekly/         # your transformed CSV each week
+plots/            # your saved figures (named by week)
+journal/
+  journal_log.csv # running log of what you ran
+```
+
+---
+
+## Your weekly routine (copy‑paste + edit 3–4 lines)
+
+1. **Scroll to the bottom** of your script.
+2. **Copy the `WEEKLY ENTRY` block** and paste it under last week’s block.
+3. Edit only the lines marked **>>> YOU FILL THESE <<<**:
+   - `week_id` (e.g., `"W06"`)
+   - `week_date` (e.g., `as.Date("2025-10-07")`)
+   - `series_this_week` (e.g., `c("UNRATE","CPIAUCSL")`)
+   - `transform_menu` (e.g., `c("level","yoy","dlog","ma12")`)
+4. **Run** the block (highlight and click Run).
+5. In the comments under the block, write:
+   - **Spark — “What do you notice?”** (1–3 bullets)
+   - **“What would convince you?”** (what comparison/test next time)
+   - **Capture — two sentences:** interpretation + next step.
+6. **Commit** your changes:
+   - Git pane → check the script + new plots/CSV → Commit
+   - Message: `journal: W06 spark/build/atelier/capture`
+   - Push.
+
+That’s it. Next week, repeat steps 1–6 with the next week.
+
+---
+
+## Picking series and transforms
+
+**Common FRED IDs**
+- `UNRATE` – Unemployment rate (monthly)  
+- `CPIAUCSL` – CPI (all items, SA, monthly)  
+- `GDPC1` – Real GDP (quarterly)  
+- `INDPRO` – Industrial Production (monthly)  
+- `PAYEMS` – Nonfarm Payrolls (monthly)  
+- `FEDFUNDS` – Fed Funds rate (monthly average)  
+- `JTSJOL` – Job openings (monthly)  
+- `HOUST` – Housing starts (monthly)
+
+**Transform menu options** (choose any):
+- `"level"` – the original series  
+- `"yoy"` – year‑over‑year % change (auto‑figures the right lag)  
+- `"dlog"` – 100 × Δlog ≈ % change per period  
+- `"g_ann"` – annualized growth rate = 100 × (periods/year) × Δlog  
+- `"maK"` – moving average over K periods (e.g., `"ma12"`)
+
+**Tip:** Start with `c("level","yoy","dlog")`. Add `"ma12"` if the series is noisy.
+
+---
+
+## Atelier (optional exploration — uncomment to try)
+
+Under your weekly block there are ready‑to‑run helpers:
+
+- **Correlation heatmap** (recent 5 years) on transformed changes:
+  ```r
+  atelier_corr(dfW06, "W06", metric = "dlog_pct", recent_years = 5)
+  ```
+- **HP filter** (trend & cycle) — install `mFilter`:
+  ```r
+  atelier_hp(dfW06, "W06", series = "UNRATE", metric = "level")
+  ```
+- **AR(p) model** on one series:
+  ```r
+  atelier_ar(dfW06, "W06", series = "CPIAUCSL", metric = "dlog_pct", p = 1)
+  ```
+- **VAR(p)** on 2–3 series — install `vars`:
+  ```r
+  atelier_var(dfW06, "W06", vars_pick = c("UNRATE","CPIAUCSL"), metric = "dlog_pct", p = 2)
+  ```
+- **PACF** to choose lags:
+  ```r
+  atelier_pacf(dfW06, "W06", series = "UNRATE", metric = "dlog_pct", max_lag = 24)
+  ```
+
+Each helper auto‑saves labeled plots to `/plots` with your week ID.
+
+> **When to use which (simple guidance):**
+> - **Correlation:** Are two series moving together? (e.g., payrolls & production)
+> - **HP filter:** Separate trend vs cycle for a business‑cycle look
+> - **PACF/AR:** Does this series predict itself at short lags?
+> - **VAR:** Do changes in A help predict B (very basic system dynamics)?
+
+---
+
+## Your 2‑sentence reflection (examples)
+
+1. **Interpretation:**  
+   “UNRATE edged up while CPI dlog% cooled, which looks like early‑cycle softening rather than a contraction.”
+2. **Next step:**  
+   “Next week I’ll compare job openings (JTSJOL) with unemployment for a Beveridge‑curve view.”
+
+Write these as `#` comments immediately under your weekly block.
+
+---
+
+## Grading (what we look for)
+
+- ✅ **Spark:** plot(s) + “notice/convince” bullets  
+- ✅ **Build:** at least one sensible transform (yoy, dlog, etc.)  
+- ✅ **Atelier:** 10–25 minutes of commented exploration (optional early weeks)  
+- ✅ **Capture:** clear 2‑sentence reflection  
+- ✅ **Git:** commit includes script + generated plots/CSV
+
+Clarity and functionality matter more than fancy code.
+
+---
+
+## Troubleshooting (quick fixes)
+
+- **Packages missing?** Re‑run:
+  ```r
+  install.packages(c("tidyverse","quantmod","lubridate","scales"))
+  install.packages(c("mFilter","vars"))  # optional
+  ```
+- **FRED download fails?** Check your internet; if on campus wifi, try again later.
+- **No plots saved?** Make sure you ran the weekly block and that `/plots` exists (the script auto‑creates it).
+- **Year‑over‑year looks weird?** Use `"yoy"` (not `"dlog"`) for smoother comparisons across years.
+- **VAR/HP errors?** Install `vars` / `mFilter`, or skip those until Weeks 6–7.
+
+---
+
+## FAQ
+
+**Q: Do I start a new file each week?**  
+A: No. Keep **one script** all semester. Each week, paste a new block at the bottom.
+
+**Q: Can I pick any series?**  
+A: Yes—start with the list above, or any FRED ID. Keep it macro‑relevant.
+
+**Q: How many series each week?**  
+A: 1–3 is perfect. Add a new one if you’re curious.
+
+**Q: What should I write?**  
+A: Short, clear notes. One paragraph max; two‑sentence reflection required.
+
+---
+
+Happy exploring! Keep your code commented and your commits tidy. Small, steady progress wins.
