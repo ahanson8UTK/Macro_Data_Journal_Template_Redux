@@ -1,0 +1,334 @@
+############################################################
+# ECON 413 — Macro Data Journal (R Script Version)
+# "Fill in the blanks" weekly workflow (no R Markdown needed)
+# ------------------------------------------------------------
+# HOW THIS WORKS (Every Week)
+# 1) Duplicate the WEEKLY BLOCK TEMPLATE (Section 4) below the last week.
+# 2) Edit just the lines marked >>> YOU FILL THESE <<< (week_id, week_date, series, transforms).
+# 3) Press Run (source the block). Plots & data will be saved to /plots and /data/weekly.
+# 4) Add your 2-sentence reflection as comments in this script right under the block.
+# 5) Commit to GitHub Classroom. Suggested message: journal: W## spark/build/atelier/capture
+#
+# Grading emphasizes: working code + clear comments. Not code elegance.
+############################################################
+
+###############################
+# 0) Setup & Libraries
+###############################
+
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+.install_if_missing <- function(pkgs) {
+  to_get <- pkgs[!pkgs %in% rownames(installed.packages())]
+  if (length(to_get)) {
+    install.packages(to_get, dependencies = TRUE)
+  }
+}
+
+# Core needed for the journal workflow
+.pkgs_core    <- c("tidyverse", "quantmod", "lubridate", "scales", "readr", "ggplot2", "zoo")
+# Optional atelier tools (filters & VARs)
+.pkgs_atelier <- c("mFilter", "vars")
+# Better PNG text rendering
+.pkgs_graphics<- c("ragg")
+
+.install_if_missing(c(.pkgs_core, .pkgs_atelier, .pkgs_graphics))
+
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(quantmod)
+  library(lubridate)
+  library(scales)
+  library(readr)
+  library(ggplot2)
+  library(zoo)
+  # Optional — only used if installed
+  if (requireNamespace("mFilter", quietly = TRUE)) library(mFilter)
+  if (requireNamespace("vars",    quietly = TRUE)) library(vars)
+  # ragg is used via requireNamespace in save_plot(), not attached
+})
+
+# Optional: fredr (only used if key is set; no need to install for most students)
+.have_fredr  <- requireNamespace("fredr", quietly = TRUE) && nzchar(Sys.getenv("FRED_API_KEY"))
+.have_mFilter<- requireNamespace("mFilter", quietly = TRUE)
+.have_vars   <- requireNamespace("vars",    quietly = TRUE)
+.have_ragg   <- requireNamespace("ragg",    quietly = TRUE)
+
+
+# A clear, print-friendly theme
+theme_413_light <- function(base_size = 12, base_family = "") {
+  ggplot2::theme_minimal(base_size = base_size, base_family = base_family) +
+    ggplot2::theme(
+      plot.background  = ggplot2::element_rect(fill = "white", colour = NA),
+      panel.background = ggplot2::element_rect(fill = "white", colour = NA),
+      strip.background = ggplot2::element_rect(fill = "grey95", colour = NA),
+      panel.grid.major = ggplot2::element_line(colour = "grey85", linewidth = 0.3),
+      panel.grid.minor = ggplot2::element_line(colour = "grey92", linewidth = 0.2),
+      axis.text        = ggplot2::element_text(colour = "black"),
+      axis.title       = ggplot2::element_text(colour = "black"),
+      axis.ticks       = ggplot2::element_line(colour = "grey50"),
+      axis.line        = ggplot2::element_line(colour = "grey50"),
+      plot.title       = ggplot2::element_text(colour = "black", face = "bold"),
+      plot.caption     = ggplot2::element_text(colour = "grey30")
+    )
+}
+
+# Make this the default for interactive plotting too (optional but recommended)
+ggplot2::theme_set(theme_413_light())
+
+# Helper to apply our theme to any plot object
+.apply_plot_theme <- function(p) p + theme_413_light()
+
+###############################
+# 1) Project Folders
+###############################
+
+.make_dirs <- function() {
+  dirs <- c("data/raw", "data/weekly", "plots", "journal")
+  for (d in dirs) dir.create(d, recursive = TRUE, showWarnings = FALSE)
+}
+.make_dirs()
+
+###############################
+# 2) Helper Functions (a la carte menu)
+###############################
+
+# Convert a quantmod xts object to a tidy tibble
+xts_to_tibble <- function(x, series_id) {
+  tibble(date = as_date(index(x)), value = as.numeric(x[,1]), series = series_id)
+}
+
+# Download one or more FRED series into a tidy tibble
+fred_get <- function(series_ids, start_date = as.Date("2000-01-01")) {
+  stopifnot(length(series_ids) >= 1)
+  raw_list <- lapply(series_ids, function(s) {
+    suppressWarnings(quantmod::getSymbols(s, src = "FRED", auto.assign = FALSE))
+  })
+  out <- purrr::map2_dfr(raw_list, series_ids, \(x, s) xts_to_tibble(x, s)) |>
+    filter(date >= start_date) |>
+    arrange(series, date)
+  # cache raw
+  write_csv(out, file = file.path("data/raw", paste0("raw_", format(Sys.Date()), ".csv")))
+  out
+}
+
+# Guess observation frequency from date gaps (approximate)
+freq_guess <- function(dates) {
+  md <- median(diff(sort(unique(dates))))  # in days
+  md <- as.numeric(md)
+  if (is.na(md)) return("unknown")
+  if (md > 300)      return("annual")
+  else if (md > 80)  return("quarterly")
+  else if (md > 26)  return("monthly")
+  else if (md > 3)   return("weekly")
+  else               return("daily")
+}
+# Vector-tolerant mapping: frequency label -> periods per year
+per_year_from_freq <- function(freq) {
+  # Accept scalar or vector
+  map <- c(annual = 1L, quarterly = 4L, monthly = 12L, weekly = 52L, daily = 365L)
+  out <- unname(map[as.character(freq)])
+  out[is.na(out)] <- 12L  # default monthly if unknown
+  out
+}
+
+# ============ Transform functions (pick a la carte) ============
+# Each returns a tibble with columns: date, series, metric, value
+
+tf_level <- function(df) {
+  df |>
+    transmute(date, series, metric = "level", value = value)
+}
+
+tf_yoy <- function(df) {
+  df %>%
+    dplyr::group_by(series) %>%
+    dplyr::arrange(date, .by_group = TRUE) %>%
+    dplyr::mutate(
+      .freq_label = freq_guess(date),
+      .k          = per_year_from_freq(.freq_label),       # vector (same value each row)
+      value       = (value / dplyr::lag(value, dplyr::first(.k)) - 1) * 100
+      #                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      # pass a true scalar to lag()
+    ) %>%
+    dplyr::ungroup() %>%
+    dplyr::transmute(date, series, metric = "yoy_pct", value)
+}
+
+tf_dlog <- function(df) {
+  df |>
+    group_by(series) |>
+    mutate(value = 100 * (log(value) - lag(log(value)))) |>
+    ungroup() |>
+    transmute(date, series, metric = "dlog_pct", value)
+}
+
+tf_growth_annualized <- function(df) {
+  df %>%
+    dplyr::group_by(series) %>%
+    dplyr::arrange(date, .by_group = TRUE) %>%
+    dplyr::mutate(
+      .freq_label = freq_guess(date),
+      .py         = per_year_from_freq(.freq_label),
+      value       = 100 * dplyr::first(.py) * (log(value) - dplyr::lag(log(value)))
+      #                ^^^^^^^^^^^^^^^^^^^^^  scalar
+    ) %>%
+    dplyr::ungroup() %>%
+    dplyr::transmute(date, series, metric = "growth_ann_pct", value)
+}
+
+tf_ma <- function(df, k = 12) {
+  # simple moving average (k periods)
+  res <- df |>
+    group_by(series) |>
+    arrange(date, .by_group = TRUE) |>
+    mutate(value = stats::filter(value, rep(1 / k, k), sides = 1)) |>
+    ungroup() |>
+    transmute(date, series, metric = paste0("ma", k), value = as.numeric(value))
+  res
+}
+
+# Apply a chosen menu of transforms
+apply_transforms <- function(df, menu = c("level", "yoy", "dlog")) {
+  pieces <- list()
+  for (m in menu) {
+    if (m == "level") pieces[[length(pieces) + 1]] <- tf_level(df)
+    else if (m == "yoy") pieces[[length(pieces) + 1]] <- tf_yoy(df)
+    else if (m == "dlog") pieces[[length(pieces) + 1]] <- tf_dlog(df)
+    else if (m == "g_ann") pieces[[length(pieces) + 1]] <- tf_growth_annualized(df)
+    else if (startsWith(m, "ma")) {
+      k <- suppressWarnings(as.integer(gsub("ma", "", m)))
+      if (is.na(k) || k <= 1) k <- 12L
+      pieces[[length(pieces) + 1]] <- tf_ma(df, k = k)
+    } else {
+      warning("Unknown transform in menu: ", m)
+    }
+  }
+  bind_rows(pieces) |>
+    arrange(series, metric, date)
+}
+
+# ============ Plotting helpers ============
+
+plot_metric_facets <- function(df_long, metric, title_prefix = "", recent_years = NULL) {
+  d <- df_long |>
+    filter(metric == !!metric)
+  if (!is.null(recent_years)) {
+    cutoff <- max(d$date, na.rm = TRUE) - years(recent_years)
+    d <- d |> filter(date >= cutoff)
+  }
+  ggplot(d, aes(date, value)) +
+    geom_line() +
+    facet_wrap(~ series, scales = "free_y") +
+    labs(title = paste(title_prefix, metric),
+         x = NULL, y = NULL,
+         caption = "Source: FRED via quantmod") +
+    theme_minimal(base_size = 12)
+}
+
+save_plot <- function(p, path, width = 8, height = 4.5, dpi = 150) {
+  p <- .apply_plot_theme(p)
+  if (.have_ragg) {
+    ragg::agg_png(filename = path, width = width, height = height,
+                  units = "in", res = dpi, background = "white")
+    print(p)
+    grDevices::dev.off()
+  } else {
+    ggplot2::ggsave(filename = path, plot = p,
+                    width = width, height = height, dpi = dpi, bg = "white",
+                    limitsize = FALSE)
+  }
+  cat("Saved plot:", path, "\n")
+  invisible(path)
+}
+
+# ============ One-button weekly runner ============
+# Produces transformed CSV, full-period plots and recent-5y plots, and appends a log.
+run_week <- function(week_id, week_date, series_ids, start_date, transform_menu) {
+  stopifnot(is.character(week_id), length(series_ids) >= 1)
+  df <- fred_get(series_ids, start_date = start_date)
+  df_long <- apply_transforms(df, menu = transform_menu)
+
+  # Save transformed data for the week
+  data_path <- file.path("data/weekly", paste0(week_id, "_transformed.csv"))
+  write_csv(df_long, data_path)
+  cat("Saved weekly data:", data_path, "\n")
+
+  # Make & save plots per metric (full history + recent 5y)
+  metrics <- unique(df_long$metric)
+  saved <- list()
+  for (m in metrics) {
+    p_full <- plot_metric_facets(df_long, m, title_prefix = paste0(week_id, " — "))
+    p_recent <- plot_metric_facets(df_long, m, title_prefix = paste0(week_id, " (Recent 5y) — "), recent_years = 5)
+
+    f1 <- file.path("plots", paste0(week_id, "_", m, "_full.png"))
+    f2 <- file.path("plots", paste0(week_id, "_", m, "_recent5y.png"))
+    saved <- c(saved, save_plot(p_full, f1), save_plot(p_recent, f2))
+  }
+
+  # Append to journal log
+  log_row <- tibble(
+    timestamp = Sys.time(),
+    week_id = week_id,
+    week_date = as.character(week_date),
+    series = paste(series_ids, collapse = ","),
+    transforms = paste(transform_menu, collapse = ","),
+    data_file = data_path,
+    plot_files = paste(saved, collapse = "|")
+  )
+  log_path <- file.path("journal", "journal_log.csv")
+  if (!file.exists(log_path)) write_csv(log_row, log_path)
+  else write_csv(log_row, log_path, append = TRUE)
+
+  invisible(df_long)
+}
+
+###############################
+# 3) Quick Reference: Transform Menu
+###############################
+# You can mix & match in transform_menu:
+#   "level"   -> raw level (as reported)
+#   "yoy"     -> year-over-year % change (auto-detects annual/quarterly/monthly/weekly)
+#   "dlog"    -> 100 * Δlog(value) ≈ % change per period
+#   "g_ann"   -> annualized growth rate: 100 * (periods_per_year) * Δlog(value)
+#   "maK"     -> moving average over K periods (e.g., "ma12" for 12-month MA)
+
+###############################
+# 4) WEEKLY BLOCK TEMPLATE — copy this block each week
+###############################
+
+# ==== WEEKLY ENTRY (copy from here) ===============================
+# >>> YOU FILL THESE <<<
+week_id         <- "W01"                             # e.g., "W01", "W02", ...
+week_date       <- as.Date("2025-09-02")             # date of class week
+series_this_week<- c("UNRATE", "CPIAUCSL")           # FRED IDs (pick 1+)
+transform_menu  <- c("level", "yoy", "dlog", "ma12") # choose from the menu above
+start_date      <- as.Date("2000-01-01")             # earliest date to include
+
+# Spark — What do you notice? (write as comments)
+# - e.g., UNRATE ticking up in 2024–25; CPI decelerating.
+# What would convince you? (write as comments)
+# - e.g., check services vs goods inflation separately next week.
+
+# Run the week:
+dfW01 <- run_week(week_id, week_date, series_this_week, start_date, transform_menu)
+
+# Atelier — sandbox for extra code/plots this week (optional):
+# Example: plot only UNRATE YoY recent 10y
+# dfW01 |> filter(series == "UNRATE", metric == "yoy_pct") |>
+#   filter(date >= max(date, na.rm = TRUE) - years(10)) |>
+#   ggplot(aes(date, value)) + geom_line() + labs(title = paste0(week_id, " — UNRATE YoY (10y)"))
+
+# Capture — 2-sentence reflection (write as comments)
+# 1) Interpretation: ...
+# 2) Next step: ...
+# ==== END WEEKLY ENTRY ===========================================
+
+
+# (When starting Week 2, copy the block above, paste it below,
+#  change week_id, week_date, series, and re-run. Nothing is overwritten.
+#  New plots/data are saved as W02_*; the log keeps a running record.)
+
+############################################################
+# End of script
+############################################################
